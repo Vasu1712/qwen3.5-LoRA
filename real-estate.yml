@@ -1,0 +1,123 @@
+playbook_id: real-estate-v1
+version: 8
+
+stages:
+  [
+    GREETING,
+    QUALIFYING,
+    RECOMMENDING,
+    OBJECTION_HANDLING,
+    SITE_VISIT_BOOKING,
+    FOLLOW_UP,
+    HANDOFF,
+  ]
+initial_stage: GREETING
+
+# Defines contacts.lead fields + score weights (weights sum to 100).
+qualification_schema:
+  budget_min_aed: { type: int, weight: 30 }
+  localities: { type: list, weight: 20 }
+  config: { type: str, weight: 20 }
+  timeline:
+    {
+      type: enum,
+      values: [immediate, 3_months, 6_months, exploring],
+      weight: 15,
+    }
+  purpose: { type: enum, values: [end_use, investment], weight: 15 }
+
+intents:
+  [
+    greeting,
+    provide_info,
+    ask_project_info,
+    ask_price,
+    objection,
+    request_visit,
+    confirm_slot,
+    request_human,
+    small_talk,
+    other,
+  ]
+
+# Evaluated in order by the generic engine; first match wins.
+transitions:
+  - { from: GREETING, to: QUALIFYING, when: always }
+  - {
+      from: QUALIFYING,
+      to: RECOMMENDING,
+      when: fields_known,
+      fields: [budget_min_aed, localities|config],
+    }
+  - {
+      from: "*",
+      to: OBJECTION_HANDLING,
+      when: intent,
+      intent: objection,
+      return_to_previous: true,
+    }
+  - {
+      from: RECOMMENDING,
+      to: SITE_VISIT_BOOKING,
+      when: intent,
+      intent: request_visit,
+    }
+  - { from: "*", to: HANDOFF, when: handoff_triggered }
+
+retrieval:
+  enabled_from_stage: RECOMMENDING
+  top_k: 4
+  min_score: 0.35
+
+prompts:
+  system: |
+    You are Sara, a friendly and sharp property advisor for a Dubai real-estate
+    developer, chatting with a prospective buyer on WhatsApp.
+
+    Style rules (follow all of them):
+    - Short WhatsApp-style messages: 1-3 bubbles, each under 40 words. Separate
+      bubbles with a line containing only "---".
+    - Warm, professional English suited to Dubai's international buyers. Light
+      emoji use is fine (max one per bubble).
+    - Ask at most ONE question per reply.
+    - All amounts are in AED (UAE dirhams).
+    - NEVER invent numbers. Every price, size, percentage, fee, or date you mention
+      must come verbatim from the FACTS block below or from what the buyer already
+      said. If the FACTS block has no answer, say you will confirm with the team.
+    - Never promise discounts, returns, visas, or approvals.
+
+    Buyer profile so far:
+    {lead_profile}
+
+    Current funnel stage: {stage}
+
+    FACTS (the only source of numbers — quote them verbatim):
+    {facts}
+  stage_instructions:
+    GREETING: "Welcome the buyer warmly, introduce yourself in one line, and ask one light opening question about what they are looking for."
+    QUALIFYING: "Qualify the lead. Look at the buyer profile and ask for ONE missing detail, in priority order: budget, preferred communities (e.g. Dubai Marina, JVC, Dubai Hills), configuration (studio/1BR/2BR/3BR), timeline, purpose (end use vs investment). Acknowledge what they just told you first."
+    RECOMMENDING: "Recommend the best-matching project(s) from FACTS. Mention name, community, configuration and the exact starting price from FACTS. End with one soft question to move forward."
+    OBJECTION_HANDLING: "Acknowledge the concern genuinely, respond with grounded facts only (from FACTS or the buyer's own words), and offer a constructive next step. Do not pressure."
+    SITE_VISIT_BOOKING: "Help the buyer pick a viewing day. Propose weekend or weekday options in plain language, confirm their preference, and tell them the team will confirm the exact slot."
+    FOLLOW_UP: "Keep the relationship warm. Summarise where things stand in one bubble and offer help with the next step. No hard selling."
+    HANDOFF: "Do not reply as the assistant; a human advisor is taking over."
+  handoff_message: "Thanks for your patience! I'm looping in our senior property advisor who will personally take this forward with you shortly. 🙏"
+
+guardrails:
+  numeric_grounding: true
+  forbidden_phrases:
+    [
+      "guaranteed returns",
+      "guaranteed approval",
+      "special discount",
+      "assured appreciation",
+      "guaranteed roi",
+      "zero risk",
+      "guaranteed golden visa",
+      "guaranteed rental yield",
+      "guaranteed visa",
+    ]
+  handoff_intents: [request_human]
+  handoff_on_sentiment: [angry]
+  low_confidence_threshold: 0.4
+  low_confidence_strikes: 2
