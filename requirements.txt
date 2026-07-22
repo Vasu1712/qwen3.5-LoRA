@@ -1,5 +1,12 @@
+# --- Hugging Face SPACE (inference + RAG) requirements ---
+# torch is provided by the ZeroGPU runtime — do NOT pin it here.
+# gradio is controlled by `sdk_version` in README.md — do NOT list it here.
+# Training deps (trl, bitsandbytes, datasets) are NOT here on purpose — the Space
+# only serves the model. Those live in requirements-train.txt for your GPU box.
 spaces
 transformers>=4.51.0
 peft>=0.11.0
 accelerate>=0.30.0
 pyyaml
+qdrant-client
+fastembed

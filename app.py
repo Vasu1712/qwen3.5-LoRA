@@ -28,6 +28,8 @@ import yaml
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 from peft import PeftConfig, PeftModel
 
+from rag import retrieve_facts, rag_enabled
+
 # --------------------------------------------------------------------------- #
 # Config — the only thing you must set is ADAPTER_ID.                          #
 # Set it here, or (without editing code) as a Space Variable named ADAPTER_ID  #
@@ -77,7 +79,14 @@ def _to_messages(history):
 # --------------------------------------------------------------------------- #
 @spaces.GPU(duration=120)
 def respond(message, history, system_prompt, max_new_tokens, temperature, top_p):
-    messages = [{"role": "system", "content": system_prompt}]
+    # RAG: fetch grounding facts for this turn and fill the {facts} slot.
+    facts = retrieve_facts(message)
+    if "{facts}" in system_prompt:
+        sys_content = system_prompt.replace("{facts}", facts)
+    else:
+        sys_content = f"{system_prompt}\n\nFACTS (only source of numbers):\n{facts}"
+
+    messages = [{"role": "system", "content": sys_content}]
     messages += _to_messages(history)
     messages.append({"role": "user", "content": message})
 
@@ -153,7 +162,8 @@ model.eval()
 _FALLBACK_SYSTEM = (
     "You are Sara, a friendly and sharp Dubai real-estate advisor chatting on "
     "WhatsApp. Keep replies short (1-3 bubbles), ask at most one question per "
-    "reply, use AED for amounts, and never invent numbers."
+    "reply, use AED for amounts, never invent numbers, and never use emojis.\n\n"
+    "FACTS (only source of numbers):\n{facts}"
 )
 
 
@@ -165,14 +175,11 @@ def _default_system_prompt() -> str:
         system = prompts.get("system", "")
         stage = playbook.get("initial_stage", "")
         stage_instr = prompts.get("stage_instructions", {}).get(stage, "")
-        system = system.format(
-            lead_profile="(nothing captured yet — this is a fresh chat)",
-            stage=stage,
-            facts=(
-                "(no property FACTS are loaded in this demo — for any specific "
-                "price, size or date, say you'll confirm with the team)"
-            ),
-        )
+        # Fill lead_profile/stage now; leave {facts} literal so respond() can
+        # replace it per turn with what Qdrant returns.
+        system = system.replace(
+            "{lead_profile}", "(nothing captured yet — this is a fresh chat)"
+        ).replace("{stage}", stage)
         if stage_instr:
             system += f"\n\nStage focus ({stage}): {stage_instr}"
         return system.strip()
@@ -192,6 +199,7 @@ demo = gr.ChatInterface(
     description=(
         f"Base `{BASE_ID}` · "
         + (f"Adapter `{ADAPTER_ID}`" if ADAPTER_ID else "no adapter (base only)")
+        + (" · RAG on" if rag_enabled() else " · RAG off")
         + " · thinking off"
     ),
     additional_inputs=[
