@@ -34,7 +34,13 @@ from peft import PeftConfig, PeftModel
 # under Settings > Variables and secrets. NOTE: a local .env file is NOT read  #
 # by Spaces — use Variables/Secrets in the Space settings.                     #
 # --------------------------------------------------------------------------- #
-ADAPTER_ID = os.environ.get("ADAPTER_ID", "vasu1712/qwen3.5-real-estate-lora")
+# Leave empty to run the BASE model alone. Set this (ideally as a Space Variable
+# named ADAPTER_ID) to a HF *model*-repo id once you have a trained LoRA adapter.
+ADAPTER_ID = os.environ.get("ADAPTER_ID", "").strip()
+
+# Base model, loaded directly when there's no adapter. When ADAPTER_ID IS set,
+# the base is auto-resolved from the adapter's config and this is ignored.
+BASE_MODEL = os.environ.get("BASE_MODEL", "Qwen/Qwen3-8B")
 
 # If the adapter or base repo is private/gated, add an HF_TOKEN *secret* in the
 # Space settings. Public repos need nothing.
@@ -118,9 +124,13 @@ def respond(message, history, system_prompt, max_new_tokens, temperature, top_p)
 # Heavy load — runs ONCE at import (startup), i.e. outside any GPU window.     #
 # Base model is resolved straight from the adapter's config.                   #
 # --------------------------------------------------------------------------- #
-BASE_ID = PeftConfig.from_pretrained(
-    ADAPTER_ID, token=HF_TOKEN
-).base_model_name_or_path
+if ADAPTER_ID:
+    # Base is auto-resolved from the adapter's config.
+    BASE_ID = PeftConfig.from_pretrained(
+        ADAPTER_ID, token=HF_TOKEN
+    ).base_model_name_or_path
+else:
+    BASE_ID = BASE_MODEL
 
 tokenizer = AutoTokenizer.from_pretrained(BASE_ID, token=HF_TOKEN)
 
@@ -130,7 +140,8 @@ model = AutoModelForCausalLM.from_pretrained(
     device_map="cuda",
     token=HF_TOKEN,
 )
-model = PeftModel.from_pretrained(model, ADAPTER_ID, token=HF_TOKEN)
+if ADAPTER_ID:
+    model = PeftModel.from_pretrained(model, ADAPTER_ID, token=HF_TOKEN)
 model.eval()
 
 
@@ -178,7 +189,11 @@ SYSTEM_PROMPT = _default_system_prompt()
 demo = gr.ChatInterface(
     fn=respond,
     title="Sara — Qwen3.5 + LoRA (real-estate playbook)",
-    description=f"Base `{BASE_ID}` · Adapter `{ADAPTER_ID}` · thinking off",
+    description=(
+        f"Base `{BASE_ID}` · "
+        + (f"Adapter `{ADAPTER_ID}`" if ADAPTER_ID else "no adapter (base only)")
+        + " · thinking off"
+    ),
     additional_inputs=[
         gr.Textbox(value=SYSTEM_PROMPT, label="System prompt", lines=8),
         gr.Slider(64, 2048, value=512, step=64, label="Max new tokens"),
