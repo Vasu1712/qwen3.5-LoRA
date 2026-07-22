@@ -5,17 +5,17 @@ Serves a gr.ChatInterface. The base model is auto-resolved from the adapter's
 config, so the only thing you must set is ADAPTER_ID (below, or as a Space
 Variable).
 
-ZeroGPU notes (see https://huggingface.co/docs/hub/spaces-zerogpu):
-  * `import spaces` (before torch) and decorate the GPU function with @spaces.GPU.
-  * ZeroGPU scans for that function within a short startup window. For a *large*
-    model, loading it at module scope blows past that window (and pulls ~18 GB
-    into the container before the app is even ready), which shows up as
-    "No @spaces.GPU function detected during startup" and 503s on the heartbeat.
-    So we DON'T load at module scope — the model is loaded lazily on the first
-    request, inside the @spaces.GPU function, and cached for later calls. Module
-    import stays trivial, so the decorator registers instantly.
-  * `duration` is dynamic: the first (uncached) call also downloads + loads the
-    9B model, so it gets a longer GPU lease than subsequent calls.
+ZeroGPU design (see https://huggingface.co/docs/hub/spaces-zerogpu):
+  * A single @spaces.GPU call may hold the GPU for at most **120 seconds**.
+    Downloading + loading a 9B model does NOT fit in that window, so the model
+    is loaded ONCE at module scope (startup, outside any GPU window). The
+    @spaces.GPU function then only runs inference, which fits well within 120s.
+  * ZeroGPU scans for the @spaces.GPU function within a short startup window, so
+    `respond` is defined *before* the heavy load — otherwise the scan times out
+    with "No @spaces.GPU function detected during startup". `model`/`tokenizer`
+    are read as globals and only touched at request time, after the load below.
+  * Module-scope `device_map="cuda"` works via ZeroGPU's startup CUDA emulation;
+    real CUDA is used inside @spaces.GPU.
 """
 
 import os
@@ -42,43 +42,11 @@ HF_TOKEN = os.environ.get("HF_TOKEN")
 
 PLAYBOOK_PATH = os.environ.get("PLAYBOOK_PATH", "real-estate.yml")
 
-
-# --------------------------------------------------------------------------- #
-# Lazy model loading — kept OUT of module scope on purpose (see docstring).    #
-# Loaded once on the first request, then cached in these globals.             #
-# --------------------------------------------------------------------------- #
-_tokenizer = None
-_model = None
+# Populated by the module-level load below (after the GPU function is defined).
+tokenizer = None
+model = None
 
 
-def _load():
-    global _tokenizer, _model
-    if _model is None:
-        # Base model is resolved straight from the adapter's config.
-        base_id = PeftConfig.from_pretrained(
-            ADAPTER_ID, token=HF_TOKEN
-        ).base_model_name_or_path
-        _tokenizer = AutoTokenizer.from_pretrained(base_id, token=HF_TOKEN)
-        model = AutoModelForCausalLM.from_pretrained(
-            base_id,
-            torch_dtype=torch.bfloat16,
-            device_map="cuda",  # real GPU is available inside @spaces.GPU
-            token=HF_TOKEN,
-        )
-        model = PeftModel.from_pretrained(model, ADAPTER_ID, token=HF_TOKEN)
-        model.eval()
-        _model = model
-    return _tokenizer, _model
-
-
-def _duration(message, history, system_prompt, max_new_tokens, temperature, top_p):
-    # First call also downloads + loads the 9B model, so give it more headroom.
-    return 300 if _model is None else 120
-
-
-# --------------------------------------------------------------------------- #
-# GPU inference — streamed, GPU held only for the duration of this call.        #
-# --------------------------------------------------------------------------- #
 def _to_messages(history):
     """Normalize Gradio chat history to [{'role','content'}], regardless of the
     Gradio version's format (v6 message-dicts, or older [user, assistant] pairs)."""
@@ -97,10 +65,12 @@ def _to_messages(history):
     return out
 
 
-@spaces.GPU(duration=_duration)
+# --------------------------------------------------------------------------- #
+# GPU inference — defined FIRST so ZeroGPU's startup scan registers it before   #
+# the heavy load below. Inference only, so it fits well within the 120s cap.    #
+# --------------------------------------------------------------------------- #
+@spaces.GPU(duration=120)
 def respond(message, history, system_prompt, max_new_tokens, temperature, top_p):
-    tokenizer, model = _load()
-
     messages = [{"role": "system", "content": system_prompt}]
     messages += _to_messages(history)
     messages.append({"role": "user", "content": message})
@@ -145,9 +115,29 @@ def respond(message, history, system_prompt, max_new_tokens, temperature, top_p)
 
 
 # --------------------------------------------------------------------------- #
-# Build the default system prompt from the real-estate playbook (light — safe  #
-# at module scope). The playbook's system template has {lead_profile}/{stage}/ #
-# {facts} slots; we fill them with demo-safe defaults. Also editable in the UI. #
+# Heavy load — runs ONCE at import (startup), i.e. outside any GPU window.     #
+# Base model is resolved straight from the adapter's config.                   #
+# --------------------------------------------------------------------------- #
+BASE_ID = PeftConfig.from_pretrained(
+    ADAPTER_ID, token=HF_TOKEN
+).base_model_name_or_path
+
+tokenizer = AutoTokenizer.from_pretrained(BASE_ID, token=HF_TOKEN)
+
+model = AutoModelForCausalLM.from_pretrained(
+    BASE_ID,
+    torch_dtype=torch.bfloat16,
+    device_map="cuda",
+    token=HF_TOKEN,
+)
+model = PeftModel.from_pretrained(model, ADAPTER_ID, token=HF_TOKEN)
+model.eval()
+
+
+# --------------------------------------------------------------------------- #
+# Build the default system prompt from the real-estate playbook.              #
+# The playbook's system template has {lead_profile}/{stage}/{facts} slots; we  #
+# fill them with demo-safe defaults. Also editable in the UI.                  #
 # --------------------------------------------------------------------------- #
 _FALLBACK_SYSTEM = (
     "You are Sara, a friendly and sharp Dubai real-estate advisor chatting on "
@@ -188,7 +178,7 @@ SYSTEM_PROMPT = _default_system_prompt()
 demo = gr.ChatInterface(
     fn=respond,
     title="Sara — Qwen3.5 + LoRA (real-estate playbook)",
-    description=f"Adapter `{ADAPTER_ID}` · base auto-resolved from adapter · thinking off",
+    description=f"Base `{BASE_ID}` · Adapter `{ADAPTER_ID}` · thinking off",
     additional_inputs=[
         gr.Textbox(value=SYSTEM_PROMPT, label="System prompt", lines=8),
         gr.Slider(64, 2048, value=512, step=64, label="Max new tokens"),
