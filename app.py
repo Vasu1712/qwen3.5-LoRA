@@ -162,6 +162,7 @@ model.eval()
 _FALLBACK_SYSTEM = (
     "You are Sara, a friendly and sharp Dubai real-estate advisor chatting on "
     "WhatsApp. Keep replies short (1-3 bubbles), ask at most one question per "
+    "never use emojis"
     "reply, use AED for amounts, never invent numbers, and never use emojis.\n\n"
     "FACTS (only source of numbers):\n{facts}"
 )
@@ -195,7 +196,7 @@ SYSTEM_PROMPT = _default_system_prompt()
 # --------------------------------------------------------------------------- #
 demo = gr.ChatInterface(
     fn=respond,
-    title="Sara — Qwen3.5 + LoRA (real-estate playbook)",
+    title="Qwen3.5 + real-estate QLoRA",
     description=(
         f"Base `{BASE_ID}` · "
         + (f"Adapter `{ADAPTER_ID}`" if ADAPTER_ID else "no adapter (base only)")
