@@ -79,12 +79,30 @@ def _duration(message, history, system_prompt, max_new_tokens, temperature, top_
 # --------------------------------------------------------------------------- #
 # GPU inference — streamed, GPU held only for the duration of this call.        #
 # --------------------------------------------------------------------------- #
+def _to_messages(history):
+    """Normalize Gradio chat history to [{'role','content'}], regardless of the
+    Gradio version's format (v6 message-dicts, or older [user, assistant] pairs)."""
+    out = []
+    for item in history or []:
+        if isinstance(item, dict):
+            role, content = item.get("role"), item.get("content")
+            if role and isinstance(content, str):
+                out.append({"role": role, "content": content})
+        elif isinstance(item, (list, tuple)) and len(item) == 2:
+            user, assistant = item
+            if user:
+                out.append({"role": "user", "content": str(user)})
+            if assistant:
+                out.append({"role": "assistant", "content": str(assistant)})
+    return out
+
+
 @spaces.GPU(duration=_duration)
 def respond(message, history, system_prompt, max_new_tokens, temperature, top_p):
     tokenizer, model = _load()
 
     messages = [{"role": "system", "content": system_prompt}]
-    messages += history  # type="messages": already a list of {role, content}
+    messages += _to_messages(history)
     messages.append({"role": "user", "content": message})
 
     model_inputs = tokenizer.apply_chat_template(
@@ -169,7 +187,6 @@ SYSTEM_PROMPT = _default_system_prompt()
 # --------------------------------------------------------------------------- #
 demo = gr.ChatInterface(
     fn=respond,
-    type="messages",
     title="Sara — Qwen3.5 + LoRA (real-estate playbook)",
     description=f"Adapter `{ADAPTER_ID}` · base auto-resolved from adapter · thinking off",
     additional_inputs=[
