@@ -13,7 +13,7 @@ stages:
   ]
 initial_stage: GREETING
 
-# Defines contacts.lead fields + score weights (weights sum to 100).
+# Defines contacts.lead fields + score weights (weights sum to 100)
 qualification_schema:
   budget_min_aed: { type: int, weight: 30 }
   localities: { type: list, weight: 20 }
