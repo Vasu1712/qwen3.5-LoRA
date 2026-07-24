@@ -86,11 +86,17 @@ def respond(message, history, system_prompt, max_new_tokens, temperature, top_p)
     else:
         sys_content = f"{system_prompt}\n\nFACTS (only source of numbers):\n{facts}"
 
-    if not history:  # first turn only — greet; do not re-introduce afterwards
+    if not history:  # first turn — greet once
         sys_content += (
             "\n\nThis is the opening message: greet the buyer warmly, introduce "
-            "yourself in one line, then ask one opening question. Do not "
-            "re-introduce yourself on later turns."
+            "yourself in one line, then ask one opening question."
+        )
+    else:  # later turns — explicitly forbid re-greeting / re-introducing
+        sys_content += (
+            "\n\nYou have ALREADY greeted and introduced yourself earlier in this "
+            "conversation. Do NOT say hello, do NOT state your name or company "
+            "again, and do NOT re-introduce yourself. Reply directly to the "
+            "buyer's latest message and move the conversation forward."
         )
 
     messages = [{"role": "system", "content": sys_content}]
