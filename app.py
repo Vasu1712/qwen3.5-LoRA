@@ -86,6 +86,13 @@ def respond(message, history, system_prompt, max_new_tokens, temperature, top_p)
     else:
         sys_content = f"{system_prompt}\n\nFACTS (only source of numbers):\n{facts}"
 
+    if not history:  # first turn only — greet; do not re-introduce afterwards
+        sys_content += (
+            "\n\nThis is the opening message: greet the buyer warmly, introduce "
+            "yourself in one line, then ask one opening question. Do not "
+            "re-introduce yourself on later turns."
+        )
+
     messages = [{"role": "system", "content": sys_content}]
     messages += _to_messages(history)
     messages.append({"role": "user", "content": message})
@@ -174,14 +181,15 @@ def _default_system_prompt() -> str:
         prompts = playbook.get("prompts", {})
         system = prompts.get("system", "")
         stage = playbook.get("initial_stage", "")
-        stage_instr = prompts.get("stage_instructions", {}).get(stage, "")
         # Fill lead_profile/stage now; leave {facts} literal so respond() can
         # replace it per turn with what Qdrant returns.
+        # NOTE: we deliberately do NOT append the GREETING stage instruction.
+        # This is one static prompt (no funnel state machine), so pinning
+        # "introduce yourself and ask an opening question" would make the model
+        # re-greet on EVERY turn. First-turn greeting is handled in respond().
         system = system.replace(
             "{lead_profile}", "(nothing captured yet — this is a fresh chat)"
         ).replace("{stage}", stage)
-        if stage_instr:
-            system += f"\n\nStage focus ({stage}): {stage_instr}"
         return system.strip()
     except Exception:
         return _FALLBACK_SYSTEM
