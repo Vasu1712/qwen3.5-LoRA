@@ -216,3 +216,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Private WhatsApp chat data + datasets derived from it — NEVER commit/push.
+# (This repo is pushed to a public HF Space; real chats contain personal data.)
+chats/
+whatsapp_chats/
+whatsapp_excluded/
+whatsapp_train.jsonl
+wa_sales.jsonl
+wa_personal.jsonl
+*WhatsApp Chat*.txt
+jobrun/

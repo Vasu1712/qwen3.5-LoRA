@@ -1,9 +1,18 @@
 """
-Minimal ZeroGPU chat demo for a Qwen3.5 (9B) base model + LoRA adapter.
+Minimal ZeroGPU chat demo for the Qwen3.5-9B base model + LoRA adapter.
 
 Serves a gr.ChatInterface. The base model is auto-resolved from the adapter's
 config, so the only thing you must set is ADAPTER_ID (below, or as a Space
 Variable).
+
+Qwen3.5-9B is a multimodal (vision+text), hybrid linear-attention/full-attention
+model ("Qwen3_5ForConditionalGeneration") — NOT a plain dense causal LM. So this
+loads it via AutoProcessor + AutoModelForMultimodalLM (not AutoTokenizer +
+AutoModelForCausalLM). This demo is text-only chat: messages use plain string
+content (no image parts), and `processor.tokenizer` is used wherever the code
+needs the underlying text tokenizer (streamer, eos id, etc.). Qwen's own model
+card states a very recent transformers is required ("older versions will not
+work") — see requirements.txt.
 
 ZeroGPU design (see https://huggingface.co/docs/hub/spaces-zerogpu):
   * A single @spaces.GPU call may hold the GPU for at most **120 seconds**.
@@ -12,10 +21,11 @@ ZeroGPU design (see https://huggingface.co/docs/hub/spaces-zerogpu):
     @spaces.GPU function then only runs inference, which fits well within 120s.
   * ZeroGPU scans for the @spaces.GPU function within a short startup window, so
     `respond` is defined *before* the heavy load — otherwise the scan times out
-    with "No @spaces.GPU function detected during startup". `model`/`tokenizer`
+    with "No @spaces.GPU function detected during startup". `model`/`processor`
     are read as globals and only touched at request time, after the load below.
   * Module-scope `device_map="cuda"` works via ZeroGPU's startup CUDA emulation;
-    real CUDA is used inside @spaces.GPU.
+    real CUDA is used inside @spaces.GPU. bf16 weights for the 9B are ~18-22GB,
+    comfortably within ZeroGPU's default 48GB "large" tier.
 """
 
 import os
@@ -25,7 +35,7 @@ import spaces  # must be imported before torch on ZeroGPU
 import torch
 import gradio as gr
 import yaml
-from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
+from transformers import AutoModelForMultimodalLM, AutoProcessor, TextIteratorStreamer
 from peft import PeftConfig, PeftModel
 
 from rag import retrieve_facts, rag_enabled
@@ -42,7 +52,7 @@ ADAPTER_ID = os.environ.get("ADAPTER_ID", "").strip()
 
 # Base model, loaded directly when there's no adapter. When ADAPTER_ID IS set,
 # the base is auto-resolved from the adapter's config and this is ignored.
-BASE_MODEL = os.environ.get("BASE_MODEL", "Qwen/Qwen3-8B")
+BASE_MODEL = os.environ.get("BASE_MODEL", "Qwen/Qwen3.5-9B")
 
 # If the adapter or base repo is private/gated, add an HF_TOKEN *secret* in the
 # Space settings. Public repos need nothing.
@@ -51,7 +61,7 @@ HF_TOKEN = os.environ.get("HF_TOKEN")
 PLAYBOOK_PATH = os.environ.get("PLAYBOOK_PATH", "real-estate.yml")
 
 # Populated by the module-level load below (after the GPU function is defined).
-tokenizer = None
+processor = None
 model = None
 
 
@@ -103,17 +113,17 @@ def respond(message, history, system_prompt, max_new_tokens, temperature, top_p)
     messages += _to_messages(history)
     messages.append({"role": "user", "content": message})
 
-    model_inputs = tokenizer.apply_chat_template(
+    model_inputs = processor.apply_chat_template(
         messages,
         tokenize=True,
         add_generation_prompt=True,
-        enable_thinking=False,  # Qwen3: no <think> block -> clean, fast replies
+        enable_thinking=False,  # Qwen3.5: no <think> block -> clean, fast replies
         return_tensors="pt",
         return_dict=True,
     ).to("cuda")
 
     streamer = TextIteratorStreamer(
-        tokenizer, skip_prompt=True, skip_special_tokens=True
+        processor.tokenizer, skip_prompt=True, skip_special_tokens=True
     )
 
     gen_kwargs = dict(
@@ -121,7 +131,7 @@ def respond(message, history, system_prompt, max_new_tokens, temperature, top_p)
         streamer=streamer,
         max_new_tokens=int(max_new_tokens),
         repetition_penalty=1.05,
-        pad_token_id=tokenizer.eos_token_id,
+        pad_token_id=processor.tokenizer.eos_token_id,
     )
     if temperature and float(temperature) > 0:
         gen_kwargs.update(
@@ -154,9 +164,9 @@ if ADAPTER_ID:
 else:
     BASE_ID = BASE_MODEL
 
-tokenizer = AutoTokenizer.from_pretrained(BASE_ID, token=HF_TOKEN)
+processor = AutoProcessor.from_pretrained(BASE_ID, token=HF_TOKEN)
 
-model = AutoModelForCausalLM.from_pretrained(
+model = AutoModelForMultimodalLM.from_pretrained(
     BASE_ID,
     torch_dtype=torch.bfloat16,
     device_map="cuda",

@@ -1,9 +1,15 @@
-# --- QLoRA TRAINING requirements (for a GPU box / Colab — NOT the Space) ---
+# --- LoRA TRAINING requirements for Qwen3.5-9B (GPU box / Colab / HF Jobs — NOT the Space) ---
 # Install torch matching your CUDA first (e.g. from pytorch.org), then:
 #   pip install -r requirements-train.txt
-transformers>=4.51
+#
+# Qwen3.5's model card: "the latest transformers is required ... older versions
+# will not work" — as of writing this means installing from git main (a stable
+# v5 release may supersede this; check https://huggingface.co/Qwen/Qwen3.5-9B
+# before assuming the pin below is still needed).
+transformers[serving] @ git+https://github.com/huggingface/transformers.git@main
 trl>=0.12
 peft>=0.11
-bitsandbytes>=0.43
 accelerate>=0.30
 datasets>=2.19
+# bitsandbytes intentionally NOT included: QLoRA (4-bit) is not recommended for
+# Qwen3.5 — train_qlora.py uses plain bf16 LoRA for this model instead.

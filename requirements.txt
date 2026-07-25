@@ -3,8 +3,14 @@
 # gradio is controlled by `sdk_version` in README.md — do NOT list it here.
 # Training deps (trl, bitsandbytes, datasets) are NOT here on purpose — the Space
 # only serves the model. Those live in requirements-train.txt for your GPU box.
+#
+# Qwen3.5-9B's model card: "the latest transformers is required ... older
+# versions will not work" — as of writing this means installing from git main.
+# This makes the Space build slower/more fragile than a plain PyPI pin; if the
+# build fails or a stable release has since shipped qwen3_5 support, check
+# https://huggingface.co/Qwen/Qwen3.5-9B and swap this for a version pin.
 spaces
-transformers>=4.51.0
+transformers[serving] @ git+https://github.com/huggingface/transformers.git@main
 peft>=0.11.0
 accelerate>=0.30.0
 pyyaml
