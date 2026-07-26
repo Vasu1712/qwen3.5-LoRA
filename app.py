@@ -52,7 +52,7 @@ ADAPTER_ID = os.environ.get("ADAPTER_ID", "").strip()
 
 # Base model, loaded directly when there's no adapter. When ADAPTER_ID IS set,
 # the base is auto-resolved from the adapter's config and this is ignored.
-BASE_MODEL = os.environ.get("BASE_MODEL", "Qwen/Qwen3.5-9B")
+BASE_MODEL = os.environ.get("BASE_MODEL", "Qwen/Qwen3.5-4B")
 
 # If the adapter or base repo is private/gated, add an HF_TOKEN *secret* in the
 # Space settings. Public repos need nothing.

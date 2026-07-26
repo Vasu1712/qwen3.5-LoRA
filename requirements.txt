@@ -4,13 +4,13 @@
 # Training deps (trl, bitsandbytes, datasets) are NOT here on purpose — the Space
 # only serves the model. Those live in requirements-train.txt for your GPU box.
 #
-# Qwen3.5-9B's model card: "the latest transformers is required ... older
-# versions will not work" — as of writing this means installing from git main.
-# This makes the Space build slower/more fragile than a plain PyPI pin; if the
-# build fails or a stable release has since shipped qwen3_5 support, check
-# https://huggingface.co/Qwen/Qwen3.5-9B and swap this for a version pin.
+# Qwen3.5 needs transformers v5 ("older versions will not work" — model card).
+# 5.2.0 is the stable release with qwen3_5 support (same pin Unsloth uses).
+# If the Space errors about missing linear-attention kernels at load time, add:
+#   flash-linear-attention
+#   causal_conv1d
 spaces
-transformers[serving] @ git+https://github.com/huggingface/transformers.git@main
+transformers==5.2.0
 peft>=0.11.0
 accelerate>=0.30.0
 pyyaml
