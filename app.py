@@ -7,12 +7,14 @@ Variable).
 
 Qwen3.5-9B is a multimodal (vision+text), hybrid linear-attention/full-attention
 model ("Qwen3_5ForConditionalGeneration") — NOT a plain dense causal LM. So this
-loads it via AutoProcessor + AutoModelForMultimodalLM (not AutoTokenizer +
-AutoModelForCausalLM). This demo is text-only chat: messages use plain string
-content (no image parts), and `processor.tokenizer` is used wherever the code
-needs the underlying text tokenizer (streamer, eos id, etc.). Qwen's own model
-card states a very recent transformers is required ("older versions will not
-work") — see requirements.txt.
+loads the model via AutoModelForMultimodalLM (not AutoModelForCausalLM). This
+demo is TEXT-ONLY chat, so it deliberately loads AutoTokenizer instead of
+AutoProcessor: the full processor drags in image/video sub-processors that
+require torchvision — which ZeroGPU does not ship — and crashes at startup
+("argument of type 'NoneType' is not iterable" in video_processing_auto).
+The tokenizer + chat template covers everything a text chat needs. Qwen's own
+model card states a very recent transformers is required ("older versions will
+not work") — see requirements.txt.
 
 ZeroGPU design (see https://huggingface.co/docs/hub/spaces-zerogpu):
   * A single @spaces.GPU call may hold the GPU for at most **120 seconds**.
@@ -21,7 +23,7 @@ ZeroGPU design (see https://huggingface.co/docs/hub/spaces-zerogpu):
     @spaces.GPU function then only runs inference, which fits well within 120s.
   * ZeroGPU scans for the @spaces.GPU function within a short startup window, so
     `respond` is defined *before* the heavy load — otherwise the scan times out
-    with "No @spaces.GPU function detected during startup". `model`/`processor`
+    with "No @spaces.GPU function detected during startup". `model`/`tokenizer`
     are read as globals and only touched at request time, after the load below.
   * Module-scope `device_map="cuda"` works via ZeroGPU's startup CUDA emulation;
     real CUDA is used inside @spaces.GPU. bf16 weights for the 9B are ~18-22GB,
@@ -35,7 +37,7 @@ import spaces  # must be imported before torch on ZeroGPU
 import torch
 import gradio as gr
 import yaml
-from transformers import AutoModelForMultimodalLM, AutoProcessor, TextIteratorStreamer
+from transformers import AutoModelForMultimodalLM, AutoTokenizer, TextIteratorStreamer
 from peft import PeftConfig, PeftModel
 
 from rag import retrieve_facts, rag_enabled
@@ -61,7 +63,7 @@ HF_TOKEN = os.environ.get("HF_TOKEN")
 PLAYBOOK_PATH = os.environ.get("PLAYBOOK_PATH", "real-estate.yml")
 
 # Populated by the module-level load below (after the GPU function is defined).
-processor = None
+tokenizer = None
 model = None
 
 
@@ -113,7 +115,7 @@ def respond(message, history, system_prompt, max_new_tokens, temperature, top_p)
     messages += _to_messages(history)
     messages.append({"role": "user", "content": message})
 
-    model_inputs = processor.apply_chat_template(
+    model_inputs = tokenizer.apply_chat_template(
         messages,
         tokenize=True,
         add_generation_prompt=True,
@@ -123,7 +125,7 @@ def respond(message, history, system_prompt, max_new_tokens, temperature, top_p)
     ).to("cuda")
 
     streamer = TextIteratorStreamer(
-        processor.tokenizer, skip_prompt=True, skip_special_tokens=True
+        tokenizer, skip_prompt=True, skip_special_tokens=True
     )
 
     gen_kwargs = dict(
@@ -131,7 +133,7 @@ def respond(message, history, system_prompt, max_new_tokens, temperature, top_p)
         streamer=streamer,
         max_new_tokens=int(max_new_tokens),
         repetition_penalty=1.05,
-        pad_token_id=processor.tokenizer.eos_token_id,
+        pad_token_id=tokenizer.eos_token_id,
     )
     if temperature and float(temperature) > 0:
         gen_kwargs.update(
@@ -164,7 +166,8 @@ if ADAPTER_ID:
 else:
     BASE_ID = BASE_MODEL
 
-processor = AutoProcessor.from_pretrained(BASE_ID, token=HF_TOKEN)
+# Tokenizer only — deliberately NOT AutoProcessor (see module docstring).
+tokenizer = AutoTokenizer.from_pretrained(BASE_ID, token=HF_TOKEN)
 
 model = AutoModelForMultimodalLM.from_pretrained(
     BASE_ID,
